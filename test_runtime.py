@@ -1,5 +1,7 @@
+import sys
 import unittest
 
+from driver_runner import run_driver
 from runtime import gate, normalize, preflight, prepare
 
 
@@ -46,6 +48,16 @@ def fresh(state="open", owner=None, through=10, safe=True):
         "history_safe": safe,
         "owner": owner,
         "through_comment_id": through,
+    }
+
+
+def worker_invocation():
+    return {
+        "schema": "ai-os-worker-invocation:v1",
+        "authoritative": False,
+        "persist_required": True,
+        "fingerprint": "sha256:invocation",
+        "worker_id": "worker-1",
     }
 
 
@@ -114,6 +126,61 @@ class RuntimeTests(unittest.TestCase):
         changed = gate(boot(), fresh(state="claimed", owner="worker-1", through=11), out)
         self.assertFalse(changed["eligible_for_persistence"])
         self.assertEqual(changed["reason_code"], "canonical_history_changed")
+
+    def test_subprocess_driver_round_trip(self):
+        adapter = (
+            "import json,sys;"
+            "inv=json.load(sys.stdin);"
+            "print(json.dumps({"
+            "'schema':'ai-os-worker-result:v1',"
+            "'invocation_fingerprint':inv['fingerprint'],"
+            "'worker_id':inv['worker_id'],"
+            "'status':'completed',"
+            "'summary':'driver ok',"
+            "'next_action':None,"
+            "'artifacts':[],"
+            "'requests':[]"
+            "}))"
+        )
+        result = run_driver(
+            worker_invocation(),
+            [sys.executable, "-c", adapter],
+            timeout_seconds=5,
+        )
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["summary"], "driver ok")
+
+    def test_subprocess_driver_rejects_identity_mismatch(self):
+        adapter = (
+            "import json,sys;"
+            "inv=json.load(sys.stdin);"
+            "print(json.dumps({"
+            "'schema':'ai-os-worker-result:v1',"
+            "'invocation_fingerprint':inv['fingerprint'],"
+            "'worker_id':'worker-2',"
+            "'status':'completed',"
+            "'summary':'wrong identity',"
+            "'next_action':None,"
+            "'artifacts':[],"
+            "'requests':[]"
+            "}))"
+        )
+        with self.assertRaisesRegex(ValueError, "identity"):
+            run_driver(
+                worker_invocation(),
+                [sys.executable, "-c", adapter],
+                timeout_seconds=5,
+            )
+
+    def test_subprocess_driver_does_not_echo_stderr(self):
+        adapter = "import sys;sys.stderr.write('TOP_SECRET');raise SystemExit(7)"
+        with self.assertRaises(RuntimeError) as ctx:
+            run_driver(
+                worker_invocation(),
+                [sys.executable, "-c", adapter],
+                timeout_seconds=5,
+            )
+        self.assertNotIn("TOP_SECRET", str(ctx.exception))
 
 
 if __name__ == "__main__":
