@@ -25,6 +25,109 @@ jobs:
       GITHUB_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: GK-studio-JP/ai-os-context
+          path: context
+      - uses: actions/checkout@v4
+        with:
+          repository: GK-studio-JP/ai-os-scheduler
+          path: scheduler
+      - uses: actions/checkout@v4
+        with:
+          repository: GK-studio-JP/ai-os-kernel
+          path: kernel
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -e context
+      - name: Build projection and dispatch
+        run: |
+          aios-context snapshot --repo GK-studio-JP/ai-bulletin-board --state open --default-process PROC-BULLETIN --output-dir projection
+          python scheduler/scheduler.py plan --view projection/scheduler-view.json --manifest projection/manifest.json --limit 1 --output dispatch/plan.json
+          python kernel/kernel.py validate-dispatch --registry kernel/registry/processes.json --plan dispatch/plan.json --output dispatch/kernel-validation.json
+      - name: Build boot and fresh replay
+        shell: bash
+        run: |
+          mkdir -p worker runtime
+          python - <<'PY'
+          import json, shutil
+          from pathlib import Path
+          plan=json.loads(Path("dispatch/plan.json").read_text())
+          check=json.loads(Path("dispatch/kernel-validation.json").read_text())
+          assert check["valid"]
+          boot={"schema":"ai-os-worker-boot:v1","authoritative":False,"persist_required":True,
+                "source_plan_fingerprint":plan.get("fingerprint"),
+                "dispatch_count":plan.get("dispatch_count",0),"dispatch":None,"capsule":None}
+          if plan["dispatches"]:
+              d=plan["dispatches"][0]
+              c=d["context"]
+              shutil.copyfile(Path("projection")/c["capsule"],"worker/capsule.json")
+              boot["dispatch"]=d
+              boot["capsule"]={"path":"capsule.json","fingerprint":c["fingerprint"],
+                               "through_comment_id":c.get("through_comment_id")}
+          Path("worker/boot.json").write_text(json.dumps(boot,indent=2,sort_keys=True)+"\n")
+          PY
+          issue="$(python -c 'import json; p=json.load(open("dispatch/plan.json")); print(str(p["dispatches"][0]["task"]).lstrip("#") if p["dispatches"] else "")')"
+          if [[ -n "$issue" ]]; then
+            aios-context replay --repo GK-studio-JP/ai-bulletin-board --issue "$issue" --output runtime/fresh.json
+          else
+            printf '{}\n' > runtime/fresh.json
+          fi
+      - name: Runtime preflight
+        shell: bash
+        run: |
+          if [[ -f worker/capsule.json ]]; then
+            python runtime.py preflight --boot worker/boot.json --capsule worker/capsule.json --fresh runtime/fresh.json --worker-id runtime-preflight --output runtime/preflight.json
+          else
+            python runtime.py preflight --boot worker/boot.json --fresh runtime/fresh.json --worker-id runtime-preflight --output runtime/preflight.json
+          fi
+      - name: Validate preflight
+        run: |
+          python - <<'PY'
+          import json
+          value=json.load(open("runtime/preflight.json"))
+          assert value["schema"]=="ai-os-runtime-preflight:v1"
+          assert value["authoritative"] is False
+          assert value["persist_required"] is True
+          assert value["status"] in {"IDLE","CLAIM_REQUIRED","READY","WAIT","STALE_CONTEXT","STOP"}
+          print("RUNTIME_PREFLIGHT_OK",value["status"],value.get("task"))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ai-os-runtime-preflight
+          path: |
+            dispatch/
+            worker/
+            runtime/
+          retention-days: 7
+name: live preflight
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '47 * * * *'
+  push:
+    paths:
+      - 'runtime.py'
+      - 'process.json'
+      - '.github/workflows/live-preflight.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-live-preflight
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
       - name: Checkout context compiler
         uses: actions/checkout@v4
         with:
