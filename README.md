@@ -76,6 +76,28 @@ python runtime.py prepare \
 
 The invocation contains only the selected dispatch and its single Context Capsule. It is provider-neutral: a manual ChatGPT session, API model, or another compute provider can consume the same envelope.
 
+## Compute driver adapter
+
+`driver_runner.py` provides the first replaceable compute boundary without making any provider authoritative. It launches one operator-selected subprocess, writes the complete `ai-os-worker-invocation:v1` JSON to that process on stdin, and requires exactly one `ai-os-worker-result:v1` JSON object on stdout.
+
+Before returning a result, the runner checks the invocation fingerprint and Worker identity. A non-zero driver exit fails closed, and driver stderr is not copied into the Runtime error message because provider adapters may use stderr for diagnostic data that must not leak into coordination state.
+
+Example:
+
+```bash
+python driver_runner.py run \
+  --invocation runtime/invocation.json \
+  --output worker-result.json \
+  -- python path/to/provider_adapter.py
+
+python runtime.py normalize \
+  --invocation runtime/invocation.json \
+  --result worker-result.json \
+  --output runtime/outcome.json
+```
+
+The adapter is intentionally outside Kernel authority. It may call an LLM, a manual bridge, or another compute service, but it must return the structured result contract and must not mutate the canonical bulletin board directly.
+
 ## Worker result
 
 A compute driver returns:
