@@ -6,6 +6,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, Sequence
 
+from runtime_middleware import MiddlewareChain
+
 INVOCATION_SCHEMA = "ai-os-worker-invocation:v1"
 RESULT_SCHEMA = "ai-os-worker-result:v1"
 
@@ -42,6 +44,7 @@ def run_driver(
     command: Sequence[str],
     *,
     timeout_seconds: int = 300,
+    middleware: MiddlewareChain | None = None,
 ) -> dict[str, Any]:
     validate_invocation(invocation)
     argv = [str(part) for part in command]
@@ -51,6 +54,9 @@ def run_driver(
         raise ValueError("driver command is required")
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be positive")
+
+    chain = middleware or MiddlewareChain()
+    chain.before_compute(invocation)
 
     completed = subprocess.run(
         argv,
@@ -75,6 +81,8 @@ def run_driver(
         raise ValueError("Worker result does not match invocation fingerprint")
     if result.get("worker_id") != invocation.get("worker_id"):
         raise ValueError("Worker result identity does not match invocation")
+
+    chain.after_compute(invocation, result)
     return result
 
 
