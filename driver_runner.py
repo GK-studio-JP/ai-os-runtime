@@ -6,7 +6,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, Sequence
 
-from runtime_middleware import MiddlewareChain
+from execution_budget import ExecutionBudgetMiddleware, effective_timeout_seconds
+from runtime_middleware import MiddlewareBlocked, MiddlewareChain
 
 INVOCATION_SCHEMA = "ai-os-worker-invocation:v1"
 RESULT_SCHEMA = "ai-os-worker-result:v1"
@@ -55,17 +56,34 @@ def run_driver(
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be positive")
 
-    chain = middleware or MiddlewareChain()
-    chain.before_compute(invocation)
-
-    completed = subprocess.run(
-        argv,
-        input=json.dumps(invocation, ensure_ascii=False),
-        text=True,
-        capture_output=True,
-        timeout=timeout_seconds,
-        check=False,
+    custom_middlewares = middleware.middlewares if middleware else ()
+    chain = MiddlewareChain(
+        (ExecutionBudgetMiddleware(), *custom_middlewares)
     )
+    chain.before_compute(invocation)
+    effective_timeout, budget_deadline = effective_timeout_seconds(
+        invocation,
+        timeout_seconds,
+    )
+
+    try:
+        completed = subprocess.run(
+            argv,
+            input=json.dumps(invocation, ensure_ascii=False),
+            text=True,
+            capture_output=True,
+            timeout=effective_timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        if budget_deadline:
+            raise MiddlewareBlocked(
+                "execution-budget",
+                "compute",
+                "deadline_seconds exceeded",
+            ) from exc
+        raise
+
     if completed.returncode != 0:
         raise RuntimeError(f"driver exited with status {completed.returncode}")
 
