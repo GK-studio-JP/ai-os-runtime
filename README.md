@@ -98,6 +98,57 @@ python runtime.py normalize \
 
 The adapter is intentionally outside Kernel authority. It may call an LLM, a manual bridge, or another compute service, but it must return the structured result contract and must not mutate the canonical bulletin board directly.
 
+## Execution budgets
+
+A dispatch may optionally carry a non-authoritative execution budget. Runtime
+normalizes that budget into the Worker invocation; absence of the field preserves
+the existing v0.1 invocation contract.
+
+```json
+{
+  "schema": "ai-os-execution-budget:v1",
+  "authoritative": false,
+  "deadline_seconds": 1800,
+  "max_steps": 100,
+  "max_tool_calls": 50,
+  "max_tokens": null
+}
+```
+
+`driver_runner.py` hard-enforces `deadline_seconds` at the subprocess boundary.
+The effective wall-clock timeout is the smaller of the operator timeout and the
+budget deadline. A budget deadline timeout fails closed as
+`execution-budget / compute`.
+
+Active step, tool-call, or token limits require the compute adapter to return
+non-authoritative execution accounting:
+
+```json
+{
+  "schema": "ai-os-execution-usage:v1",
+  "authoritative": false,
+  "steps": 37,
+  "tool_calls": 14,
+  "tokens": null
+}
+```
+
+Missing usage for an active counter limit, or a reported value above its limit,
+fails closed before the result can become a Runtime outcome. `normalize` repeats
+the same check so bypassing the subprocess runner does not bypass the budget
+contract.
+
+In this first version, step/tool/token counters are adapter-reported contract
+data rather than independently observed Runtime measurements. They are not
+authority, capability grants, acceptance evidence, or canonical state. Future
+tool adapters and receipts can provide stronger Runtime-observed accounting
+without changing the budget schema.
+
+Budget fields cannot change task ownership, Scheduler priority, Kernel
+capabilities, or persistence eligibility. Scheduler integration is optional:
+dispatches that do not carry `execution_budget` continue to use the existing
+Runtime behavior.
+
 ## Worker result
 
 A compute driver returns:
