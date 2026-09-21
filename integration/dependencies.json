@@ -1,0 +1,9 @@
+{
+  "context_contract": "actor-binding-v1",
+  "repositories": {
+    "ai-os-context": "cc5fc109f73c938fbf976f34ea777ce52c791777",
+    "ai-os-scheduler": "f68a81f44409e3103b27838b4ad89e3021b25249",
+    "ai-os-kernel": "d472370b5dd61010ac610904d5a79f0f7686c0ac",
+    "ai-os-runtime-browser-worker": "895639fc62415b9e61ca3b2376f1a04f49e25eba"
+  }
+}
