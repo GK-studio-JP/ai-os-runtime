@@ -5,12 +5,12 @@ from driver_runner import run_driver
 from runtime import gate, normalize, preflight, prepare
 
 
-def capsule(through=10):
+def capsule(through=10, source_fp="sha256:source"):
     return {
         "schema": "ai-os-context-capsule:v1",
         "authoritative": False,
         "fingerprint": "cap-123",
-        "source": {"through_comment_id": through},
+        "source": {"through_comment_id": through, "source_fingerprint": source_fp},
         "identity": {"process": "PROC-RUNTIME", "target_repository": "GK-studio-JP/ai-os-runtime"},
         "task": {"id": "#123", "objective": "exercise runtime"},
     }
@@ -41,13 +41,14 @@ def boot():
     }
 
 
-def fresh(state="open", owner=None, through=10, safe=True):
+def fresh(state="open", owner=None, through=10, safe=True, source_fp="sha256:source"):
     return {
         "task": "#123",
         "state": state,
         "history_safe": safe,
         "owner": owner,
         "through_comment_id": through,
+        "source_fingerprint": source_fp,
     }
 
 
@@ -72,6 +73,16 @@ class RuntimeTests(unittest.TestCase):
         p = preflight(boot(), capsule(), fresh(through=11), worker_id="worker-1")
         self.assertEqual(p["status"], "STALE_CONTEXT")
         self.assertEqual(p["reason_code"], "canonical_history_changed")
+
+    def test_issue_body_change_fails_closed(self):
+        p = preflight(
+            boot(),
+            capsule(),
+            fresh(source_fp="sha256:changed"),
+            worker_id="worker-1",
+        )
+        self.assertEqual(p["status"], "STALE_CONTEXT")
+        self.assertEqual(p["reason_code"], "canonical_source_changed")
 
     def test_matching_live_owner_is_ready(self):
         p = preflight(boot(), capsule(), fresh(state="claimed", owner="worker-1"), worker_id="worker-1")
@@ -126,6 +137,14 @@ class RuntimeTests(unittest.TestCase):
         changed = gate(boot(), fresh(state="claimed", owner="worker-1", through=11), out)
         self.assertFalse(changed["eligible_for_persistence"])
         self.assertEqual(changed["reason_code"], "canonical_history_changed")
+
+        source_changed = gate(
+            boot(),
+            fresh(state="claimed", owner="worker-1", source_fp="sha256:changed"),
+            out,
+        )
+        self.assertFalse(source_changed["eligible_for_persistence"])
+        self.assertEqual(source_changed["reason_code"], "canonical_source_changed")
 
     def test_subprocess_driver_round_trip(self):
         adapter = (
