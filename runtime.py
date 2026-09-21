@@ -75,6 +75,10 @@ def validate_boot(boot: dict[str, Any], capsule: dict[str, Any] | None) -> dict[
         raise ValueError(f"unsupported capsule schema: {capsule.get('schema')!r}")
     if capsule.get("authoritative") is not False:
         raise ValueError("capsule must be non-authoritative")
+    cap_digest = capsule.get("content_digest")
+    recomputed_digest = _fingerprint({k: v for k, v in capsule.items() if k != "content_digest"})
+    if not cap_digest or cap_digest != recomputed_digest:
+        raise ValueError("capsule content digest mismatch")
 
     task = dispatch.get("task")
     if not task or capsule.get("task", {}).get("id") != task:
@@ -90,6 +94,11 @@ def validate_boot(boot: dict[str, Any], capsule: dict[str, Any] | None) -> dict[
     cap_fp = capsule.get("fingerprint")
     if not cap_fp or dispatch_ctx.get("fingerprint") != cap_fp or boot_ctx.get("fingerprint") != cap_fp:
         raise ValueError("capsule fingerprint mismatch")
+    if (
+        dispatch_ctx.get("content_digest") != cap_digest
+        or boot_ctx.get("content_digest") != cap_digest
+    ):
+        raise ValueError("capsule content digest reference mismatch")
     return dispatch
 
 
