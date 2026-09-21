@@ -26,7 +26,7 @@ def budget_boot(**limits):
 
 def ready_invocation(value_boot):
     state = fresh(state="claimed", owner="worker-1")
-    check = preflight(value_boot, capsule(), state, worker_id="worker-1")
+    check = preflight(value_boot, capsule(), state, worker_id="worker-1", worker_actor="repo-owner")
     return prepare(value_boot, capsule(), check, driver="manual")
 
 
@@ -38,6 +38,7 @@ def adapter_with_usage(steps):
         "'schema':'ai-os-worker-result:v1',"
         "'invocation_fingerprint':inv['fingerprint'],"
         "'worker_id':inv['worker_id'],"
+        "'worker_actor':inv['worker_actor'],"
         "'status':'completed',"
         "'summary':'driver ok',"
         "'next_action':None,"
@@ -117,7 +118,7 @@ class ExecutionBudgetTests(unittest.TestCase):
     def test_prepare_is_backward_compatible_without_budget(self):
         value_boot = boot()
         state = fresh(state="claimed", owner="worker-1")
-        check = preflight(value_boot, capsule(), state, worker_id="worker-1")
+        check = preflight(value_boot, capsule(), state, worker_id="worker-1", worker_actor="repo-owner")
         invocation = prepare(value_boot, capsule(), check, driver="manual")
 
         self.assertNotIn("execution_budget", invocation)
@@ -184,7 +185,8 @@ class ExecutionBudgetTests(unittest.TestCase):
             "print(json.dumps({"
             "'schema':'ai-os-worker-result:v1',"
             "'invocation_fingerprint':inv['fingerprint'],"
-            "'worker_id':inv['worker_id']"
+            "'worker_id':inv['worker_id'],"
+            "'worker_actor':inv['worker_actor']"
             "}))"
         )
         with self.assertRaises(MiddlewareBlocked) as ctx:
@@ -235,6 +237,7 @@ class ExecutionBudgetTests(unittest.TestCase):
             "schema": "ai-os-worker-result:v1",
             "invocation_fingerprint": invocation["fingerprint"],
             "worker_id": "worker-1",
+            "worker_actor": "repo-owner",
             "status": "completed",
             "summary": "done",
             "next_action": None,
@@ -255,6 +258,7 @@ class ExecutionBudgetTests(unittest.TestCase):
             "schema": "ai-os-worker-result:v1",
             "invocation_fingerprint": invocation["fingerprint"],
             "worker_id": "worker-1",
+            "worker_actor": "repo-owner",
             "status": "completed",
             "summary": "done",
             "next_action": None,
