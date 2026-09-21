@@ -12,6 +12,7 @@ def invocation():
         "persist_required": True,
         "fingerprint": "sha256:invocation",
         "worker_id": "worker-1",
+        "worker_actor": "repo-owner",
     }
 
 
@@ -23,6 +24,7 @@ def successful_adapter():
         "'schema':'ai-os-worker-result:v1',"
         "'invocation_fingerprint':inv['fingerprint'],"
         "'worker_id':inv['worker_id'],"
+        "'worker_actor':inv['worker_actor'],"
         "'status':'completed',"
         "'summary':'ok'"
         "}))"
