@@ -1,0 +1,43 @@
+name: control plane compatibility
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  actor-binding:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Checkout exact dependency revisions
+        run: |
+          python - <<'PY'
+          import json, re, subprocess
+          from pathlib import Path
+          lock = json.loads(Path("integration/dependencies.json").read_text())
+          assert lock["context_contract"] == "actor-binding-v1"
+          expected = {"ai-os-context", "ai-os-scheduler", "ai-os-kernel", "ai-os-runtime-browser-worker"}
+          assert set(lock["repositories"]) == expected
+          for name, sha in lock["repositories"].items():
+              assert re.fullmatch(r"[0-9a-f]{40}", sha)
+              path = Path("dependencies") / name
+              subprocess.run(["git", "clone", "--no-checkout", f"https://github.com/GK-studio-JP/{name}.git", str(path)], check=True)
+              subprocess.run(["git", "-C", str(path), "checkout", "--detach", sha], check=True)
+              actual = subprocess.check_output(["git", "-C", str(path), "rev-parse", "HEAD"], text=True).strip()
+              assert actual == sha
+              print(f"COMPATIBILITY_PIN {name}={actual}")
+          PY
+      - name: Exercise canonical replay through both consumers
+        run: python integration/check_contract.py --root dependencies
+      - name: Runtime regression tests
+        run: python -m unittest -v
+      - name: Browser Worker regression tests with the same Context
+        working-directory: dependencies/ai-os-runtime-browser-worker
+        env:
+          PYTHONPATH: ../ai-os-context/src
+        run: python -m unittest -v
