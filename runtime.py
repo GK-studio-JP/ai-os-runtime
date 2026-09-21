@@ -131,6 +131,7 @@ def preflight(
         "reason_code": "no_dispatch",
         "task": None,
         "canonical_through_comment_id": fresh.get("through_comment_id"),
+        "canonical_source_fingerprint": fresh.get("source_fingerprint"),
         "claim_proposal": None,
     }
     if dispatch is None:
@@ -143,10 +144,19 @@ def preflight(
     elif fresh.get("history_safe") is not True or fresh.get("state") == "history_unsafe":
         result.update(status="STOP", reason_code="history_unsafe")
     else:
-        capsule_through = capsule.get("source", {}).get("through_comment_id") if capsule else None
+        capsule_source = capsule.get("source", {}) if capsule else {}
+        capsule_through = capsule_source.get("through_comment_id")
+        capsule_source_fingerprint = capsule_source.get("source_fingerprint")
         fresh_through = fresh.get("through_comment_id")
+        fresh_source_fingerprint = fresh.get("source_fingerprint")
         if capsule_through != fresh_through:
             result.update(status="STALE_CONTEXT", reason_code="canonical_history_changed")
+        elif (
+            not capsule_source_fingerprint
+            or not fresh_source_fingerprint
+            or capsule_source_fingerprint != fresh_source_fingerprint
+        ):
+            result.update(status="STALE_CONTEXT", reason_code="canonical_source_changed")
         elif fresh.get("state") == "completed":
             result.update(status="STOP", reason_code="already_completed")
         elif fresh.get("state") == "open":
@@ -227,6 +237,7 @@ def prepare(
         "process": dispatch["process"],
         "target_repository": dispatch.get("target_repository"),
         "canonical_through_comment_id": preflight_result.get("canonical_through_comment_id"),
+        "canonical_source_fingerprint": preflight_result.get("canonical_source_fingerprint"),
         "source_plan_fingerprint": boot.get("source_plan_fingerprint"),
         "preflight_fingerprint": preflight_result.get("fingerprint"),
         "input": {
@@ -314,6 +325,7 @@ def normalize(invocation: dict[str, Any], result: dict[str, Any]) -> dict[str, A
         "requests": requests,
         "invocation_fingerprint": invocation.get("fingerprint"),
         "canonical_through_comment_id": invocation.get("canonical_through_comment_id"),
+        "canonical_source_fingerprint": invocation.get("canonical_source_fingerprint"),
         "event_proposal": {
             "schema": "ai-bb-event-proposal:v1",
             "authoritative": False,
@@ -349,6 +361,8 @@ def gate(boot: dict[str, Any], fresh: dict[str, Any], outcome: dict[str, Any]) -
         eligible, reason = False, "ownership_changed"
     elif fresh.get("through_comment_id") != outcome.get("canonical_through_comment_id"):
         eligible, reason = False, "canonical_history_changed"
+    elif fresh.get("source_fingerprint") != outcome.get("canonical_source_fingerprint"):
+        eligible, reason = False, "canonical_source_changed"
 
     result = {
         "schema": GATE_SCHEMA,
@@ -361,6 +375,7 @@ def gate(boot: dict[str, Any], fresh: dict[str, Any], outcome: dict[str, Any]) -
         "source_plan_fingerprint": boot.get("source_plan_fingerprint"),
         "outcome_fingerprint": outcome.get("fingerprint"),
         "canonical_through_comment_id": fresh.get("through_comment_id"),
+        "canonical_source_fingerprint": fresh.get("source_fingerprint"),
         "event_proposal": outcome.get("event_proposal") if eligible else None,
     }
     result["fingerprint"] = _fingerprint(result)
