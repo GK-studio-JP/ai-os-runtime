@@ -29,14 +29,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: GK-studio-JP/ai-os-context
+          ref: cc5fc109f73c938fbf976f34ea777ce52c791777
           path: context
       - uses: actions/checkout@v4
         with:
           repository: GK-studio-JP/ai-os-scheduler
+          ref: f68a81f44409e3103b27838b4ad89e3021b25249
           path: scheduler
       - uses: actions/checkout@v4
         with:
           repository: GK-studio-JP/ai-os-kernel
+          ref: d472370b5dd61010ac610904d5a79f0f7686c0ac
           path: kernel
       - uses: actions/setup-python@v5
         with:
@@ -82,9 +85,9 @@ jobs:
         shell: bash
         run: |
           if [[ -f worker/capsule.json ]]; then
-            python runtime.py preflight --boot worker/boot.json --capsule worker/capsule.json --fresh runtime/fresh.json --worker-id runtime-preflight --output runtime/preflight.json
+            python runtime.py preflight --boot worker/boot.json --capsule worker/capsule.json --fresh runtime/fresh.json --worker-id runtime-preflight --worker-actor github-actions[bot] --output runtime/preflight.json
           else
-            python runtime.py preflight --boot worker/boot.json --fresh runtime/fresh.json --worker-id runtime-preflight --output runtime/preflight.json
+            python runtime.py preflight --boot worker/boot.json --fresh runtime/fresh.json --worker-id runtime-preflight --worker-actor github-actions[bot] --output runtime/preflight.json
           fi
       - name: Validate preflight
         run: |
