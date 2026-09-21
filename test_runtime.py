@@ -1,3 +1,5 @@
+import hashlib
+import json
 import sys
 import unittest
 
@@ -5,8 +7,13 @@ from driver_runner import run_driver
 from runtime import gate, normalize, preflight, prepare
 
 
+def _digest(value):
+    canonical = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def capsule(through=10, source_fp="sha256:source"):
-    return {
+    value = {
         "schema": "ai-os-context-capsule:v1",
         "authoritative": False,
         "fingerprint": "cap-123",
@@ -14,6 +21,8 @@ def capsule(through=10, source_fp="sha256:source"):
         "identity": {"process": "PROC-RUNTIME", "target_repository": "GK-studio-JP/ai-os-runtime"},
         "task": {"id": "#123", "objective": "exercise runtime"},
     }
+    value["content_digest"] = _digest(value)
+    return value
 
 
 def boot():
@@ -27,7 +36,7 @@ def boot():
         "priority": 100,
         "capabilities": [],
         "next_action": "exercise runtime",
-        "context": {"capsule": "capsules/issue-123.json", "fingerprint": "cap-123", "through_comment_id": 10},
+        "context": {"capsule": "capsules/issue-123.json", "fingerprint": "cap-123", "content_digest": capsule()["content_digest"], "through_comment_id": 10},
         "source": {"repository": "GK-studio-JP/ai-bulletin-board"},
     }
     return {
@@ -37,7 +46,7 @@ def boot():
         "source_plan_fingerprint": "sha256:plan",
         "dispatch_count": 1,
         "dispatch": dispatch,
-        "capsule": {"path": "capsule.json", "fingerprint": "cap-123", "through_comment_id": 10},
+        "capsule": {"path": "capsule.json", "fingerprint": "cap-123", "content_digest": capsule()["content_digest"], "through_comment_id": 10},
     }
 
 
@@ -87,6 +96,18 @@ class RuntimeTests(unittest.TestCase):
     def test_matching_live_owner_is_ready(self):
         p = preflight(boot(), capsule(), fresh(state="claimed", owner="worker-1"), worker_id="worker-1")
         self.assertEqual(p["status"], "READY")
+
+    def test_tampered_capsule_content_fails_closed(self):
+        value = capsule()
+        value["task"]["objective"] = "tampered"
+        with self.assertRaisesRegex(ValueError, "content digest"):
+            preflight(boot(), value, fresh(), worker_id="worker-1")
+
+    def test_mismatched_capsule_digest_reference_fails_closed(self):
+        value = boot()
+        value["dispatch"]["context"]["content_digest"] = "sha256:" + "0" * 64
+        with self.assertRaisesRegex(ValueError, "digest reference"):
+            preflight(value, capsule(), fresh(), worker_id="worker-1")
 
     def test_prepare_binds_invocation_to_worker_and_capsule(self):
         p = preflight(boot(), capsule(), fresh(state="claimed", owner="worker-1"), worker_id="worker-1")
