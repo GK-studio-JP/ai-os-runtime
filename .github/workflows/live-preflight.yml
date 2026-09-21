@@ -65,6 +65,7 @@ jobs:
               shutil.copyfile(Path("projection")/c["capsule"],out/"capsule.json")
               boot["dispatch"]=d
               boot["capsule"]={"path":"capsule.json","fingerprint":c["fingerprint"],
+                               "content_digest":c.get("content_digest"),
                                "through_comment_id":c.get("through_comment_id")}
           (out/"boot.json").write_text(json.dumps(boot,indent=2,sort_keys=True)+"\n")
           PY
