@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import selectors
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -11,6 +14,7 @@ from runtime_middleware import MiddlewareBlocked, MiddlewareChain
 
 INVOCATION_SCHEMA = "ai-os-worker-invocation:v1"
 RESULT_SCHEMA = "ai-os-worker-result:v1"
+DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024
 
 
 def _read(path: str) -> Any:
@@ -40,11 +44,85 @@ def validate_invocation(invocation: dict[str, Any]) -> None:
         raise ValueError("worker invocation worker_id is required")
 
 
+def _run_bounded_subprocess(
+    argv: list[str],
+    invocation: dict[str, Any],
+    *,
+    timeout_seconds: int,
+    max_output_bytes: int,
+) -> tuple[int, bytes]:
+    payload = json.dumps(invocation, ensure_ascii=False).encode("utf-8")
+    process = subprocess.Popen(
+        argv,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if process.stdin is None or process.stdout is None:
+        process.kill()
+        process.wait()
+        raise RuntimeError("driver subprocess pipes are unavailable")
+
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ)
+    chunks: list[bytes] = []
+    total = 0
+    deadline = time.monotonic() + timeout_seconds
+
+    try:
+        process.stdin.write(payload)
+        process.stdin.close()
+
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                process.kill()
+                process.wait()
+                raise subprocess.TimeoutExpired(argv, timeout_seconds)
+
+            events = selector.select(timeout=remaining)
+            if not events:
+                continue
+
+            chunk = os.read(
+                process.stdout.fileno(),
+                min(65536, max_output_bytes - total + 1),
+            )
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_output_bytes:
+                process.kill()
+                process.wait()
+                raise ValueError("driver stdout exceeds max_output_bytes")
+            chunks.append(chunk)
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 and process.poll() is None:
+            process.kill()
+            process.wait()
+            raise subprocess.TimeoutExpired(argv, timeout_seconds)
+        try:
+            returncode = process.wait(timeout=max(remaining, 0.001))
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            raise
+    finally:
+        selector.close()
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
+    return returncode, b"".join(chunks)
+
+
 def run_driver(
     invocation: dict[str, Any],
     command: Sequence[str],
     *,
     timeout_seconds: int = 300,
+    max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
     middleware: MiddlewareChain | None = None,
 ) -> dict[str, Any]:
     validate_invocation(invocation)
@@ -55,6 +133,12 @@ def run_driver(
         raise ValueError("driver command is required")
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be positive")
+    if (
+        not isinstance(max_output_bytes, int)
+        or isinstance(max_output_bytes, bool)
+        or max_output_bytes < 1
+    ):
+        raise ValueError("max_output_bytes must be positive")
 
     custom_middlewares = middleware.middlewares if middleware else ()
     chain = MiddlewareChain(
@@ -67,13 +151,11 @@ def run_driver(
     )
 
     try:
-        completed = subprocess.run(
+        returncode, stdout_bytes = _run_bounded_subprocess(
             argv,
-            input=json.dumps(invocation, ensure_ascii=False),
-            text=True,
-            capture_output=True,
-            timeout=effective_timeout,
-            check=False,
+            invocation,
+            timeout_seconds=effective_timeout,
+            max_output_bytes=max_output_bytes,
         )
     except subprocess.TimeoutExpired as exc:
         if budget_deadline:
@@ -84,11 +166,16 @@ def run_driver(
             ) from exc
         raise
 
-    if completed.returncode != 0:
-        raise RuntimeError(f"driver exited with status {completed.returncode}")
+    if returncode != 0:
+        raise RuntimeError(f"driver exited with status {returncode}")
 
     try:
-        result = json.loads(completed.stdout)
+        stdout = stdout_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("driver stdout must be UTF-8 JSON") from exc
+
+    try:
+        result = json.loads(stdout)
     except json.JSONDecodeError as exc:
         raise ValueError("driver stdout must be one JSON object") from exc
     if not isinstance(result, dict):
@@ -103,13 +190,13 @@ def run_driver(
     chain.after_compute(invocation, result)
     return result
 
-
 def command_run(args: argparse.Namespace) -> None:
     invocation = _read(args.invocation)
     result = run_driver(
         invocation,
         args.driver_command,
         timeout_seconds=args.timeout_seconds,
+        max_output_bytes=args.max_output_bytes,
     )
     _write(args.output, result)
 
@@ -125,6 +212,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--invocation", required=True)
     p.add_argument("--output")
     p.add_argument("--timeout-seconds", type=int, default=300)
+    p.add_argument("--max-output-bytes", type=int, default=DEFAULT_MAX_OUTPUT_BYTES)
     p.add_argument(
         "driver_command",
         nargs=argparse.REMAINDER,
