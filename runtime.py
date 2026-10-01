@@ -102,7 +102,13 @@ def validate_boot(boot: dict[str, Any], capsule: dict[str, Any] | None) -> dict[
     return dispatch
 
 
-def _claim_proposal(task: str, worker_id: str, next_action: str) -> dict[str, Any]:
+def _claim_proposal(
+    task: str,
+    worker_id: str,
+    next_action: str,
+    *,
+    prior_claim_ref: str | None = None,
+) -> dict[str, Any]:
     return {
         "schema": "ai-bb-event-proposal:v1",
         "authoritative": False,
@@ -111,7 +117,12 @@ def _claim_proposal(task: str, worker_id: str, next_action: str) -> dict[str, An
             "type": "CLAIM",
             "agent_id": worker_id,
             "task": task,
-            "idempotency_key": _event_key("CLAIM", task, worker_id),
+            "idempotency_key": _event_key(
+                "CLAIM",
+                task,
+                worker_id,
+                prior_claim_ref,
+            ),
             "summary": "Runtime preflight requests task ownership before Worker execution.",
             "next_action": next_action,
             "artifacts": [],
@@ -222,7 +233,12 @@ def preflight(
             result.update(
                 status="CLAIM_REQUIRED",
                 reason_code="task_unclaimed",
-                claim_proposal=_claim_proposal(task, worker_id, str(next_action)),
+                claim_proposal=_claim_proposal(
+                    task,
+                    worker_id,
+                    str(next_action),
+                    prior_claim_ref=fresh.get("prior_claim_ref"),
+                ),
             )
         elif fresh.get("state") == "claimed":
             result.update(status="READY", reason_code="ownership_confirmed")
