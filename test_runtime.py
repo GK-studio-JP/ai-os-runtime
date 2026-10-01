@@ -78,6 +78,7 @@ def fresh(
     task_spec_fp="sha256:task-spec",
     event_count=0,
     latest_owner_event=None,
+    prior_claim_ref=None,
 ):
     return {
         "task": "#123",
@@ -88,6 +89,7 @@ def fresh(
         "through_comment_id": through,
         "canonical_event_count": event_count,
         "latest_owner_event": latest_owner_event,
+        "prior_claim_ref": prior_claim_ref,
         "task_spec_fingerprint": task_spec_fp,
         "source_fingerprint": source_fp,
     }
@@ -109,6 +111,31 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(p["status"], "CLAIM_REQUIRED")
         self.assertEqual(p["claim_proposal"]["event"]["type"], "CLAIM")
         self.assertEqual(p["claim_proposal"]["event"]["agent_id"], "worker-1")
+
+    def test_claim_idempotency_tracks_lease_cycle(self):
+        initial = preflight(boot(), capsule(), fresh(), worker_id="worker-1")
+        retry = preflight(boot(), capsule(), fresh(), worker_id="worker-1")
+        reclaim = preflight(
+            boot(),
+            capsule(),
+            fresh(prior_claim_ref="comment:10"),
+            worker_id="worker-1",
+        )
+        reclaim_retry = preflight(
+            boot(),
+            capsule(),
+            fresh(prior_claim_ref="comment:10"),
+            worker_id="worker-1",
+        )
+
+        initial_key = initial["claim_proposal"]["event"]["idempotency_key"]
+        retry_key = retry["claim_proposal"]["event"]["idempotency_key"]
+        reclaim_key = reclaim["claim_proposal"]["event"]["idempotency_key"]
+        reclaim_retry_key = reclaim_retry["claim_proposal"]["event"]["idempotency_key"]
+
+        self.assertEqual(initial_key, retry_key)
+        self.assertNotEqual(initial_key, reclaim_key)
+        self.assertEqual(reclaim_key, reclaim_retry_key)
 
     def test_stale_context_fails_closed(self):
         p = preflight(boot(), capsule(), fresh(through=11), worker_id="worker-1")
